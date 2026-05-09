@@ -1,0 +1,42 @@
+version: 0.2
+
+env:
+  secrets-manager:
+    SSH_KEY: "ec2-deploy-key"
+
+phases:
+  pre_build:
+    commands:
+      - echo "$SSH_KEY" > deploy_key
+      - chmod 600 deploy_key
+
+      - aws ecr get-login-password --region ca-central-1 | docker login --username AWS --password-stdin YOUR_ACCOUNT_ID.dkr.ecr.ca-central-1.amazonaws.com
+
+  build:
+    commands:
+      - docker buildx build --platform linux/arm64 -t cineplex-monitor .
+
+      - docker tag cineplex-monitor:latest YOUR_ACCOUNT_ID.dkr.ecr.ca-central-1.amazonaws.com/cineplex-monitor:latest
+
+      - docker push YOUR_ACCOUNT_ID.dkr.ecr.ca-central-1.amazonaws.com/cineplex-monitor:latest
+
+  post_build:
+    commands:
+      - |
+        ssh -o StrictHostKeyChecking=no \
+        -i deploy_key ubuntu@54.175.214.53 << 'EOF'
+
+        aws ecr get-login-password --region ca-central-1 \
+        | docker login --username AWS --password-stdin 238015273670.dkr.ecr.ca-central-1.amazonaws.com
+
+        docker pull YOUR_ACCOUNT_ID.dkr.ecr.ca-central-1.amazonaws.com/cineplex-monitor:latest
+
+        docker rm -f cineplex-monitor || true
+
+        docker run -d \
+          --name cineplex-monitor \
+          --restart unless-stopped \
+          --env-file /home/ubuntu/.env \
+          YOUR_ACCOUNT_ID.dkr.ecr.ca-central-1.amazonaws.com/cineplex-monitor:latest
+
+        EOF
