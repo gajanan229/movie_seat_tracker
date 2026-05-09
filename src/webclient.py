@@ -13,6 +13,8 @@ def log(msg: str) -> None:
     print(f"[{ts}] {msg}")
 
 POLL_SECONDS = 30
+CONCURRENCY = 5  # max pages open simultaneously
+SEAT_COOLDOWN_HOURS = 24
 
 # One entry per movie/showtime/day you want to watch
 TARGETS = [
@@ -98,7 +100,6 @@ TARGETS = [
 ]
 
 
-
 EMAIL_FROM = os.environ.get("ALERT_EMAIL_FROM")
 EMAIL_TO = os.environ.get("ALERT_EMAIL_TO")
 SMTP_HOST = os.environ.get("SMTP_HOST")
@@ -119,16 +120,21 @@ def _send_email_sync(subject: str, body: str) -> None:
 
 async def send_email(subject: str, body: str) -> None:
     if not all([EMAIL_FROM, EMAIL_TO, SMTP_HOST, SMTP_USER, SMTP_PASS]):
-        log("Email not configured; printing alert instead:")
-        log(subject)
-        log(body)
+        log(f"Email not configured — alert: {subject}")
         return
     loop = asyncio.get_running_loop()
     await loop.run_in_executor(None, lambda: _send_email_sync(subject, body))
     log(f"Email sent: {subject}")
 
-async def check_target(page, target):
-    log(f"Checking: {target['name']}")
+async def check_target(context, target, sem):
+    async with sem:
+        page = await context.new_page()
+        try:
+            return await _check_target(page, target)
+        finally:
+            await page.close()
+
+async def _check_target(page, target):
     await page.goto(target["url"], wait_until="load")
     await page.wait_for_selector('svg [data-testid^="Standard-"]', timeout=30000)
 
@@ -136,10 +142,8 @@ async def check_target(page, target):
     available = []
     extra_showtimes = 0
 
-    # Run seat check and showtime count concurrently
     async def get_seats():
         if wanted:
-            log(f"  Looking for specific seats: {wanted}")
             for seat in wanted:
                 selector = f'svg [data-testid="Standard-available-seat-{seat}"]'
                 if await page.locator(selector).count() > 0:
@@ -158,41 +162,32 @@ async def check_target(page, target):
             return
         container = page.locator("div.DraggableScrollContainer_scrollContent__QR6O0")
         actual = await container.locator("button").count()
-        log(f"  Showtimes: {actual} found, {expected} expected")
         if actual > expected:
             extra_showtimes = actual - expected
 
     await asyncio.gather(get_seats(), get_showtime_count())
-
-    if available:
-        log(f"  Seats: {len(available)} available -> {available}")
-    else:
-        log(f"  Seats: none available")
-
     return available, extra_showtimes
-
-SEAT_COOLDOWN_HOURS = 24
 
 async def main():
     poll_count = 0
-    seat_alerted: dict[str, datetime.datetime] = {}  # key -> time of last seat alert
-    showtime_alerted: set[str] = set()               # keys permanently suppressed after first showtime alert
+    seat_alerted: dict[str, datetime.datetime] = {}
+    showtime_alerted: set[str] = set()
 
-    log(f"Starting seat monitor for {len(TARGETS)} showtime(s). Polling every {POLL_SECONDS}s.")
-    for t in TARGETS:
-        seats = t['wanted_seats'] if t['wanted_seats'] else "any"
-        log(f"  - {t['name']} | seats: {seats} | expected showtimes: {t.get('number_of_showtimes', 'N/A')}")
+    log(f"Starting seat monitor — {len(TARGETS)} targets, polling every {POLL_SECONDS}s, concurrency {CONCURRENCY}")
 
     async with async_playwright() as p:
-        log("Launching browser...")
-        browser = await p.chromium.launch(headless=True)
+        browser = await p.chromium.launch(
+            headless=True,
+            args=[
+                "--disable-dev-shm-usage",
+                "--no-sandbox",
+                "--disable-gpu",
+                "--disable-extensions",
+                "--disable-background-networking",
+            ],
+        )
         context = await browser.new_context()
-
-        pages = []
-        for target in TARGETS:
-            page = await context.new_page()
-            pages.append((page, target))
-        log("Browser ready.\n")
+        sem = asyncio.Semaphore(CONCURRENCY)
 
         while True:
             poll_count += 1
@@ -200,40 +195,43 @@ async def main():
             now = datetime.datetime.now()
 
             results = await asyncio.gather(
-                *[check_target(page, target) for page, target in pages],
+                *[check_target(context, target, sem) for target in TARGETS],
                 return_exceptions=True
             )
 
-            for (page, target), result in zip(pages, results):
+            alerts = 0
+            for target, result in zip(TARGETS, results):
                 key = target["name"]
                 if isinstance(result, Exception):
-                    log(f"ERROR checking {key}: {result}")
+                    log(f"ERROR [{key}]: {result}")
                     continue
                 available, extra_showtimes = result
 
                 if available:
                     last = seat_alerted.get(key)
                     if last is None or (now - last).total_seconds() >= SEAT_COOLDOWN_HOURS * 3600:
-                        log(f"ALERT [SEATS]: {key} | {target['url']} -> {available}")
+                        log(f"ALERT [SEATS]: {key} -> {available}")
                         await send_email(
                             f"Seat available: {key}",
                             f"Movie/Showtime: {key}\nFound available seats: {', '.join(available)}\n{target['url']}",
                         )
                         seat_alerted[key] = now
+                        alerts += 1
                     else:
                         hours_left = SEAT_COOLDOWN_HOURS - (now - last).total_seconds() / 3600
-                        log(f"  Seats found for {key} — suppressed (re-alerts in {hours_left:.1f}h)")
+                        log(f"SUPPRESSED [SEATS]: {key} — re-alerts in {hours_left:.1f}h")
 
                 if extra_showtimes and key not in showtime_alerted:
                     expected = target.get("number_of_showtimes")
-                    log(f"ALERT [NEW SHOWTIME]: {key} | {extra_showtimes} new showtime(s) detected (expected {expected}, got {expected + extra_showtimes}) | {target['url']}")
+                    log(f"ALERT [NEW SHOWTIME]: {key} — {extra_showtimes} new (expected {expected}, got {expected + extra_showtimes})")
                     await send_email(
                         f"New showtime added: {key}",
                         f"Movie/Showtime: {key}\n{extra_showtimes} new showtime(s) detected (expected {expected}, got {expected + extra_showtimes})\n{target['url']}",
                     )
                     showtime_alerted.add(key)
+                    alerts += 1
 
-            log(f"Poll #{poll_count} done. Sleeping {POLL_SECONDS}s...\n")
+            log(f"Poll #{poll_count} done — {alerts} alert(s). Sleeping {POLL_SECONDS}s...\n")
             await asyncio.sleep(POLL_SECONDS)
 
 if __name__ == "__main__":
