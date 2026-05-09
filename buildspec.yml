@@ -10,15 +10,15 @@ phases:
       - echo "$SSH_KEY" > deploy_key
       - chmod 600 deploy_key
 
-      - aws ecr get-login-password --region ca-central-1 | docker login --username AWS --password-stdin YOUR_ACCOUNT_ID.dkr.ecr.ca-central-1.amazonaws.com
+      - aws ecr get-login-password --region ca-central-1 | docker login --username AWS --password-stdin 238015273670.dkr.ecr.ca-central-1.amazonaws.com
 
   build:
     commands:
       - docker buildx build --platform linux/arm64 -t cineplex-monitor .
 
-      - docker tag cineplex-monitor:latest YOUR_ACCOUNT_ID.dkr.ecr.ca-central-1.amazonaws.com/cineplex-monitor:latest
+      - docker tag cineplex-monitor:latest 238015273670.dkr.ecr.ca-central-1.amazonaws.com/cineplex-monitor:latest
 
-      - docker push YOUR_ACCOUNT_ID.dkr.ecr.ca-central-1.amazonaws.com/cineplex-monitor:latest
+      - docker push 238015273670.dkr.ecr.ca-central-1.amazonaws.com/cineplex-monitor:latest
 
   post_build:
     commands:
@@ -29,7 +29,7 @@ phases:
         aws ecr get-login-password --region ca-central-1 \
         | docker login --username AWS --password-stdin 238015273670.dkr.ecr.ca-central-1.amazonaws.com
 
-        docker pull YOUR_ACCOUNT_ID.dkr.ecr.ca-central-1.amazonaws.com/cineplex-monitor:latest
+        docker pull 238015273670.dkr.ecr.ca-central-1.amazonaws.com/cineplex-monitor:latest
 
         docker rm -f cineplex-monitor || true
 
@@ -37,6 +37,6 @@ phases:
           --name cineplex-monitor \
           --restart unless-stopped \
           --env-file /home/ubuntu/.env \
-          YOUR_ACCOUNT_ID.dkr.ecr.ca-central-1.amazonaws.com/cineplex-monitor:latest
+          238015273670.dkr.ecr.ca-central-1.amazonaws.com/cineplex-monitor:latest
 
         EOF
