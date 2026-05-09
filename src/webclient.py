@@ -91,9 +91,9 @@ TARGETS = [
     },
     {
         "name": "Test - sun Jul 19・7:00 PM",
-        "url": "https://www.cineplex.com/ticketing/preview?theatreId=7408&showtimeId=531229&dbox=false",
-        "wanted_seats": ["F14"],
-        "number_of_showtimes": 2
+        "url": "https://www.cineplex.com/ticketing/preview?theatreId=7408&showtimeId=531246&dbox=false",
+        "wanted_seats": ["F10"],
+        "number_of_showtimes": 0
     }
 ]
 
