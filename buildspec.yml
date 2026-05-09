@@ -7,14 +7,14 @@ env:
 phases:
   pre_build:
     commands:
-      - echo "$SSH_KEY" > deploy_key
+      - printf "%s" "$SSH_KEY" > deploy_key
       - chmod 600 deploy_key
 
       - aws ecr get-login-password --region ca-central-1 | docker login --username AWS --password-stdin 238015273670.dkr.ecr.ca-central-1.amazonaws.com
 
   build:
     commands:
-      - docker buildx build --platform linux/arm64 -t cineplex-monitor .
+      - docker build -t cineplex-monitor .
 
       - docker tag cineplex-monitor:latest 238015273670.dkr.ecr.ca-central-1.amazonaws.com/cineplex-monitor:latest
 
