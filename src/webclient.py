@@ -14,7 +14,7 @@ def log(msg: str) -> None:
 
 POLL_SECONDS = 30
 CONCURRENCY = 5  # max pages open simultaneously
-SEAT_COOLDOWN_HOURS = 24
+SEAT_COOLDOWN_HOURS = 12
 
 # One entry per movie/showtime/day you want to watch
 TARGETS = [
@@ -137,7 +137,7 @@ async def check_target(context, target, sem):
 async def _check_target(page, target):
     await page.goto(target["url"], wait_until="load")
     await page.wait_for_selector('svg [data-testid^="Standard-"]', timeout=30000)
-    await asyncio.sleep(1)
+    await asyncio.sleep(2)
 
     wanted = target.get("wanted_seats", [])
     available = []
