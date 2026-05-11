@@ -137,6 +137,7 @@ async def check_target(context, target, sem):
 async def _check_target(page, target):
     await page.goto(target["url"], wait_until="load")
     await page.wait_for_selector('svg [data-testid^="Standard-"]', timeout=30000)
+    await asyncio.sleep(1)
 
     wanted = target.get("wanted_seats", [])
     available = []
