@@ -143,6 +143,14 @@ async def _check_target(page, target):
     available = []
     extra_showtimes = 0
 
+    async def query_any_seats():
+        elements = await page.locator('svg [data-testid^="Standard-available-seat-"]').all()
+        seats = []
+        for el in elements:
+            test_id = await el.get_attribute("data-testid")
+            seats.append(test_id.replace("Standard-available-seat-", ""))
+        return seats
+
     async def get_seats():
         if wanted:
             for seat in wanted:
@@ -150,11 +158,17 @@ async def _check_target(page, target):
                 if await page.locator(selector).count() > 0:
                     available.append(seat)
         else:
-            elements = await page.locator('svg [data-testid^="Standard-available-seat-"]').all()
-            for el in elements:
-                test_id = await el.get_attribute("data-testid")
-                seat = test_id.replace("Standard-available-seat-", "")
-                available.append(seat)
+            seats = await query_any_seats()
+            if len(seats) > 200:
+                for attempt in range(3):
+                    log(f"  [{target['name']}] {len(seats)} seats found — possible render glitch, retrying ({attempt + 1}/3)...")
+                    await asyncio.sleep(2)
+                    seats = await query_any_seats()
+                    if len(seats) <= 200:
+                        break
+                else:
+                    log(f"  [{target['name']}] still {len(seats)} seats after 3 retries — alerting anyway")
+            available.extend(seats)
 
     async def get_showtime_count():
         nonlocal extra_showtimes
