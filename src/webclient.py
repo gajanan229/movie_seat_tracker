@@ -12,7 +12,7 @@ def log(msg: str) -> None:
     ts = datetime.datetime.now().strftime("%H:%M:%S")
     print(f"[{ts}] {msg}")
 
-POLL_SECONDS = 30
+POLL_SECONDS = 1
 CONCURRENCY = 5  # max pages open simultaneously
 SEAT_COOLDOWN_HOURS = 6
 
@@ -94,7 +94,7 @@ TARGETS = [
     {
         "name": "Test - sun Jul 19・7:00 PM",
         "url": "https://www.cineplex.com/ticketing/preview?theatreId=7408&showtimeId=531246&dbox=false",
-        "wanted_seats": ["F10"],
+        "wanted_seats": ["F10", "F11"],
         "number_of_showtimes": 0
     }
 ]
@@ -137,7 +137,7 @@ async def check_target(context, target, sem):
 async def _check_target(page, target):
     await page.goto(target["url"], wait_until="load")
     await page.wait_for_selector('svg [data-testid^="Standard-"]', timeout=30000)
-    await asyncio.sleep(4)
+    await asyncio.sleep(1)
 
     wanted = target.get("wanted_seats", [])
     available = []
@@ -185,7 +185,7 @@ async def _check_target(page, target):
 
 async def main():
     poll_count = 0
-    seat_alerted: dict[str, datetime.datetime] = {}
+    seat_alerted: dict[tuple[str, str], datetime.datetime] = {}  # (showtime, seat) -> last alert time
     showtime_alerted: set[str] = set()
 
     log(f"Starting seat monitor — {len(TARGETS)} targets, polling every {POLL_SECONDS}s, concurrency {CONCURRENCY}")
@@ -223,18 +223,26 @@ async def main():
                 available, extra_showtimes = result
 
                 if available:
-                    last = seat_alerted.get(key)
-                    if last is None or (now - last).total_seconds() >= SEAT_COOLDOWN_HOURS * 3600:
-                        log(f"ALERT [SEATS]: {key} -> {available}")
+                    new_seats = []
+                    suppressed_seats = []
+                    for seat in available:
+                        seat_key = (key, seat)
+                        last = seat_alerted.get(seat_key)
+                        if last is None or (now - last).total_seconds() >= SEAT_COOLDOWN_HOURS * 3600:
+                            new_seats.append(seat)
+                            seat_alerted[seat_key] = now
+                        else:
+                            suppressed_seats.append(seat)
+
+                    if suppressed_seats:
+                        log(f"SUPPRESSED [SEATS]: {key} — {suppressed_seats} already alerted within 24h")
+                    if new_seats:
+                        log(f"ALERT [SEATS]: {key} -> {new_seats}")
                         await send_email(
                             f"Seat available: {key}",
-                            f"Movie/Showtime: {key}\nFound available seats: {', '.join(available)}\n{target['url']}",
+                            f"Movie/Showtime: {key}\nFound available seats: {', '.join(new_seats)}\n{target['url']}",
                         )
-                        seat_alerted[key] = now
                         alerts += 1
-                    else:
-                        hours_left = SEAT_COOLDOWN_HOURS - (now - last).total_seconds() / 3600
-                        log(f"SUPPRESSED [SEATS]: {key} — re-alerts in {hours_left:.1f}h")
 
                 if extra_showtimes and key not in showtime_alerted:
                     expected = target.get("number_of_showtimes")
