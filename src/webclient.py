@@ -13,7 +13,7 @@ def log(msg: str) -> None:
     print(f"[{ts}] {msg}")
 
 POLL_SECONDS = 1
-CONCURRENCY = 5  # max pages open simultaneously
+CONCURRENCY = 7  # max pages open simultaneously
 SEAT_COOLDOWN_HOURS = 6
 
 # One entry per movie/showtime/day you want to watch
@@ -160,7 +160,7 @@ async def _check_target(page, target):
         else:
             seats = await query_any_seats()
             if len(seats) > 200:
-                for attempt in range(3):
+                for attempt in range(5):
                     log(f"  [{target['name']}] {len(seats)} seats found — possible render glitch, retrying ({attempt + 1}/3)...")
                     await asyncio.sleep(2)
                     seats = await query_any_seats()
