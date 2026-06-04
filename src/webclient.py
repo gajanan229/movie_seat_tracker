@@ -13,7 +13,7 @@ def log(msg: str) -> None:
     print(f"[{ts}] {msg}")
 
 POLL_SECONDS = 1
-CONCURRENCY = 7  # max pages open simultaneously
+CONCURRENCY = 4  # max pages open simultaneously
 SEAT_COOLDOWN_HOURS = 6
 
 # One entry per movie/showtime/day you want to watch
@@ -68,34 +68,11 @@ TARGETS = [
         "number_of_showtimes": 2
     },
     {
-        "name": "The Odyssey - Thu Jul 16・2:00 PM",
-        "url": "https://www.cineplex.com/ticketing/preview?theatreId=7408&showtimeId=511927&dbox=false",
-        "wanted_seats": [],
-        "number_of_showtimes": 1
-    },
-    {
-        "name": "The Odyssey - Fri Jul 17・7:00 PM",
-        "url": "https://www.cineplex.com/ticketing/preview?theatreId=7408&showtimeId=511924&dbox=false",
-        "wanted_seats": [],
-        "number_of_showtimes": 1
-    },
-    {
-        "name": "The Odyssey - sat Jul 18・7:00 PM",
-        "url": "https://www.cineplex.com/ticketing/preview?theatreId=7408&showtimeId=511925&dbox=false",
-        "wanted_seats": [],
-        "number_of_showtimes": 1
-    },
-    {
-        "name": "The Odyssey - sun Jul 19・7:00 PM",
-        "url": "https://www.cineplex.com/ticketing/preview?theatreId=7408&showtimeId=511926&dbox=false",
-        "wanted_seats": [],
-        "number_of_showtimes": 1
-    },
-    {
         "name": "Test - sun Jul 19・7:00 PM",
         "url": "https://www.cineplex.com/ticketing/preview?theatreId=7408&showtimeId=531246&dbox=false",
         "wanted_seats": ["F10", "F11"],
-        "number_of_showtimes": 0
+        "number_of_showtimes": 0,
+        "check_interval_hours": 24  # liveness check only — check at most once per 24h
     }
 ]
 
@@ -161,13 +138,14 @@ async def _check_target(page, target):
             seats = await query_any_seats()
             if len(seats) > 200:
                 for attempt in range(5):
-                    log(f"  [{target['name']}] {len(seats)} seats found — possible render glitch, retrying ({attempt + 1}/3)...")
+                    log(f"  [{target['name']}] {len(seats)} seats found — possible render glitch, retrying ({attempt + 1}/5)...")
                     await asyncio.sleep(2)
                     seats = await query_any_seats()
                     if len(seats) <= 200:
                         break
                 else:
-                    log(f"  [{target['name']}] still {len(seats)} seats after 3 retries — alerting anyway")
+                    log(f"  [{target['name']}] still {len(seats)} seats after 5 retries — likely glitch, skipping (no alert)")
+                    return  # ignore: don't alert, don't record these seats
             available.extend(seats)
 
     async def get_showtime_count():
@@ -187,6 +165,7 @@ async def main():
     poll_count = 0
     seat_alerted: dict[tuple[str, str], datetime.datetime] = {}  # (showtime, seat) -> last alert time
     showtime_alerted: set[str] = set()
+    last_checked: dict[str, datetime.datetime] = {}  # showtime -> last time it was checked
 
     log(f"Starting seat monitor — {len(TARGETS)} targets, polling every {POLL_SECONDS}s, concurrency {CONCURRENCY}")
 
@@ -209,13 +188,24 @@ async def main():
             log(f"--- Poll #{poll_count} ---")
             now = datetime.datetime.now()
 
+            # Only check targets that are due (respects per-target check_interval_hours)
+            due_targets = []
+            for target in TARGETS:
+                interval = target.get("check_interval_hours")
+                if interval is not None:
+                    last = last_checked.get(target["name"])
+                    if last is not None and (now - last).total_seconds() < interval * 3600:
+                        continue  # not due yet, skip
+                last_checked[target["name"]] = now
+                due_targets.append(target)
+
             results = await asyncio.gather(
-                *[check_target(context, target, sem) for target in TARGETS],
+                *[check_target(context, target, sem) for target in due_targets],
                 return_exceptions=True
             )
 
             alerts = 0
-            for target, result in zip(TARGETS, results):
+            for target, result in zip(due_targets, results):
                 key = target["name"]
                 if isinstance(result, Exception):
                     log(f"ERROR [{key}]: {result}")
